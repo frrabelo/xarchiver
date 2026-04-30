@@ -1,0 +1,173 @@
+name: Build Xarchiver
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+  workflow_dispatch:
+
+jobs:
+  build-linux-64:
+    name: Build Linux 64-bit AppImage
+    runs-on: ubuntu-20.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libgtk-3-dev intltool pkg-config wget libglib2.0-dev
+
+      - name: Configure and Build
+        run: |
+          ./autogen.sh
+          ./configure --prefix=/usr
+          make -j$(nproc)
+          make install DESTDIR=$(pwd)/AppDir
+
+      - name: Download linuxdeployqt
+        run: |
+          wget -c -nv "https://github.com/probonopd/linuxdeployqt/releases/download/continuous/linuxdeployqt-continuous-x86_64.AppImage"
+          chmod a+x linuxdeployqt-continuous-x86_64.AppImage
+
+      - name: Create AppImage
+        run: |
+          export VERSION=$(date +%Y%m%d)
+          mkdir -p AppDir/usr/share/applications
+          mkdir -p AppDir/usr/share/icons/hicolor/128x128/apps
+          cp xarchiver.desktop.in AppDir/usr/share/applications/xarchiver.desktop
+          cp pixmaps/xarchiver.png AppDir/usr/share/icons/hicolor/128x128/apps/
+          sed -i 's/Icon=.*/Icon=xarchiver/' AppDir/usr/share/applications/xarchiver.desktop
+          ./linuxdeployqt-continuous-x86_64.AppImage AppDir/usr/share/applications/xarchiver.desktop -appimage
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Xarchiver-Linux-x86_64.AppImage
+          path: '*.AppImage'
+
+  build-linux-32:
+    name: Build Linux 32-bit AppImage
+    needs: build-linux-64
+    runs-on: ubuntu-20.04
+    container:
+      image: i386/ubuntu:20.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Dependencies
+        run: |
+          apt-get update
+          apt-get install -y build-essential libgtk-3-dev intltool pkg-config wget file sudo software-properties-common
+
+      - name: Configure and Build
+        run: |
+          ./autogen.sh
+          ./configure --prefix=/usr
+          make -j$(nproc)
+          make install DESTDIR=$(pwd)/AppDir
+
+      - name: Download AppImageTool 32-bit
+        run: |
+          wget -c -nv "https://github.com/AppImage/AppImageKit/releases/download/13/appimagetool-i686.AppImage"
+          chmod a+x appimagetool-i686.AppImage
+          ./appimagetool-i686.AppImage --appimage-extract
+
+      - name: Create AppDir Structure
+        run: |
+          mkdir -p AppDir/usr/share/applications
+          mkdir -p AppDir/usr/share/icons/hicolor/128x128/apps
+          cp xarchiver.desktop.in AppDir/usr/share/applications/xarchiver.desktop
+          cp pixmaps/xarchiver.png AppDir/usr/share/icons/hicolor/128x128/apps/
+          sed -i 's/Icon=.*/Icon=xarchiver/' AppDir/usr/share/applications/xarchiver.desktop
+          
+          cat > AppDir/AppRun << 'EOF'
+          #!/bin/sh
+          HERE="$(dirname "$(readlink -f "${0}")")"
+          export LD_LIBRARY_PATH="${HERE}/usr/lib:${LD_LIBRARY_PATH}"
+          export XDG_DATA_DIRS="${HERE}/usr/share:${XDG_DATA_DIRS}"
+          exec "${HERE}/usr/bin/xarchiver" "$@"
+          EOF
+          chmod +x AppDir/AppRun
+
+      - name: Create AppImage
+        run: |
+          export VERSION=$(date +%Y%m%d)
+          ARCH=i686 squashfs-root/AppRun AppDir
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Xarchiver-Linux-i686.AppImage
+          path: '*.AppImage'
+
+  build-windows-64:
+    name: Build Windows 64-bit
+    needs: build-linux-32
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            base-devel
+            mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-gtk3
+            intltool
+
+      - name: Configure and Build
+        run: |
+          ./autogen.sh
+          ./configure --prefix=/mingw64
+          make -j$(nproc)
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Xarchiver-Windows-x86_64
+          path: src/xarchiver.exe
+
+  build-windows-32:
+    name: Build Windows 32-bit
+    needs: build-windows-64
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW32
+          update: true
+          install: >-
+            base-devel
+            mingw-w64-i686-toolchain
+            mingw-w64-i686-gtk3
+            intltool
+
+      - name: Configure and Build
+        run: |
+          ./autogen.sh
+          ./configure --prefix=/mingw32
+          make -j$(nproc)
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Xarchiver-Windows-i686
+          path: src/xarchiver.exe
